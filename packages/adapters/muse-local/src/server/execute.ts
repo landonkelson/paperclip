@@ -2,9 +2,16 @@ import {
   runAdapterExecutionTargetProcess,
   readAdapterExecutionTarget,
 } from "@paperclipai/adapter-utils/execution-target";
+import { fileURLToPath } from "node:url";
+const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 import {
   asString,
   asNumber,
+  materializePaperclipSkillCopy,
+  isPaperclipSkillSourceMissing,
+  readPaperclipRuntimeSkillEntries,
+  resolveLegacyPaperclipDesiredSkillNames as resolveMuseDesiredSkillNames,
+  buildSkillLibraryManifestMarkdown,
   parseObject,
   renderTemplate,
   hydrateFreshSessionHandoff,
@@ -85,6 +92,74 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime?.sessionId ?? "");
   const canResumeSession = runtimeSessionId.length > 0;
   const resumeSessionId = canResumeSession ? runtimeSessionId : null;
+  // Skills resolution and staging
+  const museSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
+  const desiredSkillNames = new Set(resolveMuseDesiredSkillNames(config, museSkillEntries));
+  const selectedSkills = museSkillEntries.filter(
+    (entry) => desiredSkillNames.has(entry.key) && !isPaperclipSkillSourceMissing(entry),
+  );
+
+  for (const entry of museSkillEntries.filter((e) => desiredSkillNames.has(e.key))) {
+    if (isPaperclipSkillSourceMissing(entry) && onLog) {
+      await onLog(
+        "stderr",
+        `[paperclip] Warning: skill "${entry.key}" is enabled for this agent but its files are unavailable and it was not mounted${
+          entry.missingDetail ? `: ${entry.missingDetail}` : "."
+        }\n`,
+      );
+    }
+  }
+
+  const skillManifest = buildSkillLibraryManifestMarkdown({
+    entries: museSkillEntries,
+    desiredSkillKeys: desiredSkillNames,
+  });
+
+  const stagedCleanup: Array<{ kind: "dir" | "file"; path: string }> = [];
+  const ensureCleanupDir = (candidate: string) => stagedCleanup.push({ kind: "dir", path: candidate });
+
+  if (selectedSkills.length > 0) {
+    const stagingRoots = [
+      { dir: path.join(cwd, ".agents"), skillsDir: path.join(cwd, ".agents", "skills") },
+      { dir: path.join(cwd, ".muse"), skillsDir: path.join(cwd, ".muse", "skills") },
+    ];
+
+    for (const { dir, skillsDir } of stagingRoots) {
+      const dirExisted = await fs.access(dir).then(() => true).catch(() => false);
+      if (!dirExisted) {
+        await fs.mkdir(dir, { recursive: true });
+        ensureCleanupDir(dir);
+      }
+      const skillsDirExisted = await fs.access(skillsDir).then(() => true).catch(() => false);
+      if (!skillsDirExisted) {
+        await fs.mkdir(skillsDir, { recursive: true });
+        ensureCleanupDir(skillsDir);
+      }
+      for (const skill of selectedSkills) {
+        const target = path.join(skillsDir, skill.runtimeName);
+        const targetExists = await fs.access(target).then(() => true).catch(() => false);
+        if (targetExists) {
+          if (onLog) {
+            await onLog("stdout", `[paperclip] Muse skill target already exists at ${target}; leaving it unchanged.\n`);
+          }
+          continue;
+        }
+        try {
+          await materializePaperclipSkillCopy(skill.source, target);
+          ensureCleanupDir(target);
+        } catch (err: unknown) {
+          if (onLog) {
+            await onLog(
+              "stderr",
+              `[paperclip] Failed to stage skill "${skill.key}" to ${target}: ${
+                err instanceof Error ? err.message : String(err)
+              }\n`,
+            );
+          }
+        }
+      }
+    }
+  }
 
   // Instructions
   const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
@@ -141,6 +216,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   let prompt = joinPromptSections([
     promptInstructionsPrefix,
+    skillManifest ? `${skillManifest}\n\n` : "",
     renderedBootstrapPrompt,
     selectInitialCommunicationGuidance(context, { resumedSession: Boolean(resumeSessionId) }),
     wakePrompt,
@@ -290,5 +366,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     };
   } finally {
     await fs.unlink(tmpPrompt).catch(() => {});
+    for (const entry of [...stagedCleanup].reverse()) {
+      if (entry.kind === "file") {
+        await fs.rm(entry.path, { force: true }).catch(() => undefined);
+      } else {
+        await fs.rm(entry.path, { recursive: true, force: true }).catch(() => undefined);
+      }
+    }
   }
 }

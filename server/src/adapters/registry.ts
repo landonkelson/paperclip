@@ -101,6 +101,8 @@ import {
 } from "@paperclipai/adapter-kimi-local";
 import {
   execute as museExecute,
+  listMuseSkills,
+  syncMuseSkills,
   testEnvironment as museTestEnvironment,
   sessionCodec as museSessionCodec,
   MUSE_DEVICE_LOGIN_COMMAND,
@@ -900,6 +902,8 @@ const museLocalAdapter: ServerAdapterModule = {
   runtimeToolDelivery: "environment",
   execute: museExecute,
   testEnvironment: museTestEnvironment,
+  listSkills: listMuseSkills,
+  syncSkills: syncMuseSkills,
   sessionCodec: museSessionCodec,
   sessionManagement: getAdapterSessionManagement("muse_local") ?? undefined,
   supportsToolRefreshOnResume: false,
@@ -907,7 +911,7 @@ const museLocalAdapter: ServerAdapterModule = {
   supportsLocalAgentJwt: true,
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
-  requiresMaterializedRuntimeSkills: false,
+  requiresMaterializedRuntimeSkills: true,
   getRuntimeCommandSpec: (config) => ({
     command: readConfiguredCommand(config, "muse"),
     detectCommand: readConfiguredCommand(config, "muse"),

@@ -1,2 +1,2 @@
 export { buildMuseLocalConfig } from "./build-config.js";
-export { parseMuseStdoutLine } from "./parse-stdout.js";
+export { parseMuseStdoutLine, createMuseStdoutParser } from "./parse-stdout.js";

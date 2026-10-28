@@ -21,3 +21,5 @@ export const loginCapability = {
     };
   },
 };
+
+export { listMuseSkills, syncMuseSkills } from "./skills.js";
