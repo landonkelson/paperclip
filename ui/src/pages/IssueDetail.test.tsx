@@ -1526,7 +1526,7 @@ describe("IssueDetail", () => {
     await waitForAssertion(() => expect(mockIssuesApi.update).toHaveBeenCalledTimes(1));
     expect(getLastProjectId(issue.companyId)).toBe("original-project");
     await act(async () => failedUpdate.reject(new Error("Project save failed")));
-    await waitForAssertion(() => expect(mockPushToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Task update failed" })));
+    await waitForAssertion(() => expect(mockPushToast).toHaveBeenCalledWith(expect.objectContaining({ title: "Couldn't update the task" })));
     expect(getLastProjectId(issue.companyId)).toBe("original-project");
     await act(async () => properties.onUpdate({ projectId }));
     await waitForAssertion(() => expect(mockIssuesApi.update).toHaveBeenCalledTimes(2));
@@ -1534,6 +1534,31 @@ describe("IssueDetail", () => {
     await act(async () => successfulUpdate.resolve({ ...issue, projectId }));
     await waitForAssertion(() => expect(getLastProjectId(issue.companyId)).toBe(projectId ?? ""));
     expect(getLastProjectId("company-2")).toBeUndefined();
+  });
+
+  it("does not post after the account changes while comment queries cancel", async () => {
+    mockAuthApi.getSession.mockResolvedValue({ user: { id: "account-a" } });
+    mockIssuesApi.addComment.mockResolvedValue(createIssueComment({ body: "Account A retained text" }));
+    mockIssuesApi.get.mockResolvedValue(createIssue());
+    await act(async () => renderIssueView());
+    await flushReact();
+    const props = mockIssueChatThreadRender.mock.calls.at(-1)?.[0] as { onAdd: (body: string) => Promise<void> };
+    let release!: () => void;
+    const cancellation = new Promise<void>(resolve => { release = resolve; });
+    const cancel = vi.spyOn(queryClient, "cancelQueries").mockReturnValue(cancellation);
+    let pending!: Promise<unknown>;
+    try {
+      await act(async () => { pending = props.onAdd("Account A retained text").catch(error => error); });
+      await waitForAssertion(() => expect(cancel).toHaveBeenCalledTimes(2));
+      await act(async () => {
+        queryClient.setQueryData(queryKeys.auth.session, { user: { id: "account-b" } });
+        release();
+      });
+      const result = await pending;
+      expect(mockIssuesApi.addComment).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ name: "AbortError" });
+      await waitForAssertion(() => expect((mockIssueChatThreadRender.mock.calls.at(-1)?.[0]?.comments ?? []).some((comment: IssueComment) => comment.body === "Account A retained text")).toBe(false));
+    } finally { release(); cancel.mockRestore(); }
   });
 
   it("keeps an existing conversation on its agent-addressed route", async () => {
@@ -3465,6 +3490,45 @@ describe("IssueDetail", () => {
       );
       expect(tooltip?.textContent).toContain("Dotta");
       expect(tooltip?.textContent).toContain("via CodexCoder");
+    });
+  });
+
+  it("keeps a queued turn's starting input in history after reopen", async () => {
+    const opener = createIssueComment({ id: "reopen-input" });
+    const followUp = createIssueComment({ id: "later-input", createdAt: new Date("2026-04-21T00:00:07.000Z") });
+    mockIssuesApi.get.mockResolvedValue(createIssue({ status: "todo", assigneeAgentId: "agent-1", executionRunId: null }));
+    mockIssuesApi.listComments.mockResolvedValue([opener, followUp]);
+    mockIssuesApi.recentComments.mockResolvedValue({ comments: [opener, followUp], latestCommentId: followUp.id, hasMore: false });
+    const queuedRuns = [{
+      runId: "reopened-run", status: "queued", contextIssueId: "issue-1", agentId: "agent-1",
+      adapterType: "paperclip_runner", startedAt: null, finishedAt: null,
+      createdAt: "2026-04-21T00:00:06.000Z", invocationSource: "automation",
+      wakeupRequestId: "reopen-wake", wakeCommentIds: [opener.id, followUp.id],
+    }];
+    mockActivityApi.recentRunsForIssue.mockResolvedValue(queuedRuns);
+    mockActivityApi.runsForIssue.mockResolvedValue(queuedRuns);
+    const queue = createQueuedCommentQueue({
+      queueId: "reopen-wake", state: "queued", targetRunId: null,
+      steeringDisposition: "temporarily_unavailable",
+      entries: [opener, followUp].map((comment, position) => ({ comment, position, canEdit: true, canDiscard: true })),
+    });
+    mockIssuesApi.getQueuedComments.mockResolvedValue(queue);
+    mockIssuesApi.reorderQueuedComments.mockResolvedValue(queue);
+    await act(async () => renderIssueView());
+    await waitForAssertion(() => {
+      const props = mockIssueChatThreadRender.mock.calls.at(-1)?.[0];
+      expect(mockIssuesApi.getQueuedComments).toHaveBeenCalled();
+      expect(props?.comments.find((comment: IssueComment) => comment.id === opener.id))
+        .toMatchObject({ body: opener.body });
+      expect(props?.comments.find((comment: IssueComment) => comment.id === opener.id)?.consumedByRunId).toBeFalsy();
+      expect(props?.comments.find((comment: IssueComment) => comment.id === opener.id)?.queueState).toBeUndefined();
+      expect(props?.queuedCommentQueue?.entries.map((entry: { comment: IssueComment }) => entry.comment.id))
+        .toEqual([followUp.id]);
+    });
+    const props = mockIssueChatThreadRender.mock.calls.at(-1)?.[0];
+    await act(async () => props.onReorderQueuedComments([followUp.id], queue.revision));
+    expect(mockIssuesApi.reorderQueuedComments).toHaveBeenCalledWith("issue-1", {
+      orderedCommentIds: [opener.id, followUp.id], queueId: queue.queueId, revision: queue.revision,
     });
   });
 

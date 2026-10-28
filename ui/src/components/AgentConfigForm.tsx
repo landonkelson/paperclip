@@ -919,7 +919,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
   runnerSettingsTargetRef.current = runnerSettingsTarget;
   useEffect(() => () => { runnerSettingsTargetRef.current = ""; }, []);
   const showRunnerUpgrade = !isCreate
-    && ["codex_local", "claude_local"].includes(props.agent.adapterType)
+    && ["codex_local", "claude_local", "grok_local"].includes(props.agent.adapterType)
     && adapterType === props.agent.adapterType
     && !runnerDiscovery.isError
     && (runnerAvailability?.defaultRunner === "paperclip" || canQualifyRunnerUpgrade);
@@ -1210,6 +1210,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
         (overlay.runtime.runtimeConfig as Record<string, unknown> | undefined)?.aiConnection ?? props.agent.runtimeConfig.aiConnection,
       ).data;
       if (!isCreate && props.agent.adapterType === "paperclip_runner" && adapterType === "paperclip_runner"
+        && runnerAvailability?.defaultRunner !== "paperclip"
         && !isExternalRunner && aiConnection?.mode !== "router" && !isDirty && environmentId && canQualifyRunnerEnvironment(environmentList.find(environment => environment.id === environmentId))) {
         const target = runnerSettingsTargetRef.current;
         // Qualify only the saved computer. The strict agent-scoped endpoint
@@ -1426,7 +1427,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
         ? "mode"
         : adapterType === "opencode_local"
           ? "variant"
-          : adapterType === "grok_local" || adapterType === "muse_local" ? "reasoningEffort"
+          : harnessType === "grok_local" || harnessType === "muse_local" ? "reasoningEffort"
           : adapterType === "pi_local" ? "thinking" : "effort";
   const thinkingEffortOptions =
     isCodexHarness
@@ -1442,19 +1443,19 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             ? kimiThinkingEffortOptions
             : adapterType === "pi_local"
               ? [{ id: "", label: "Auto" }, ...["off", "minimal", "low", "medium", "high", "xhigh"].map(id => ({ id, label: id }))]
-              : harnessType === "claude_local" || adapterType === "grok_local" || adapterType === "muse_local"
-                ? [{ id: "", label: "Auto" }, ...setupEfforts(isRunnerHarness ? harnessType : adapterType, currentModelId).map((id) => ({
+              : harnessType === "claude_local" || harnessType === "grok_local" || harnessType === "muse_local"
+                ? [{ id: "", label: "Auto" }, ...setupEfforts(harnessType, currentModelId).map((id) => ({
                     id,
                     label: id === "xhigh" ? "X-High" : id[0].toUpperCase() + id.slice(1),
                   }))]
                 : claudeThinkingEffortOptions;
   const currentThinkingEffort = isCreate
     ? val!.thinkingEffort
-    : isCodexHarness || (adapterType === "paperclip_runner" && harnessType === "claude_local")
+    : isCodexHarness || (adapterType === "paperclip_runner" && ["claude_local", "grok_local"].includes(harnessType))
       ? eff(
           "adapterConfig",
           thinkingEffortKey,
-          String(config[thinkingEffortKey] ?? config.reasoningEffort ?? config.modelReasoningEffort ?? config.effort ?? ""),
+          String(config.modelReasoningEffort ?? config.reasoningEffort ?? config.effort ?? ""),
         )
       : adapterType === "cursor"
         ? eff("adapterConfig", "mode", String(config.mode ?? ""))
@@ -1599,7 +1600,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             <div className="min-w-0 flex-1 space-y-1">
               <p className="text-sm font-medium">Upgrade to Paperclip Runner</p>
               <p className="text-sm text-muted-foreground">
-                Keep {harnessType === "claude_local" ? "Claude" : "Codex"}, your model, account, and compatible settings.
+                Keep your harness, model, account, and compatible settings.
                 New sessions start fresh; past runs stay available.
               </p>
               {canQualifyRunnerUpgrade && runnerAvailability?.defaultRunner !== "paperclip" ? (

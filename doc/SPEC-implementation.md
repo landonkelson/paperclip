@@ -324,6 +324,15 @@ Invariants:
 - no cycles in reporting tree
 - `terminated` agents cannot be resumed
 
+Agent configuration also has a versioned YAML representation in the Advanced
+tab, including instruction text, skills, tools, channels, permissions, secrets,
+API key operations, and revision restore. Resource saves use their owning APIs
+and expose partial failures; they are not a cross-resource transaction.
+[Agent configuration YAML](agent-configuration-yaml.md) defines its schema,
+replacement semantics, secret preservation, and revision preconditions. It uses
+the existing configuration and resource APIs, retaining their authorization
+and approval gates. Agent lifecycle commands remain separate actions.
+
 ## 7.3 `agent_api_keys`
 
 - `id` uuid pk
@@ -758,6 +767,7 @@ V1 non-terminal liveness rule:
 - A published advisory GitHub review can also remain `in_review` through an authorized external response wait or a saved monitor. Rating, CI state, and merge state alone do not create human attention. The current committed wait is an action path while its assigned endpoint and conversation remain active; it creates no Mine participation.
 - a blocked chain is covered only when each unresolved leaf issue is live or explicitly waiting
 - external waits are durable only when persisted as a bounded monitor/scheduled wake, a first-class blocker with a named owner and action, or healthy delegated child work connected by a blocker edge when the source must wait; parent/child structure alone is not a wait path
+- automatic monitor checks require an agent-owned task in `in_progress` or `in_review`; an authorized human may request one check of a retained monitor on a `blocked` task through normal admission without changing its status or bypassing dependency, recovery, ownership, pause or budget gates; provider-quota recovery monitors remain paused until the task resumes; a skipped manual dispatch returns a conflict instead of claiming success
 - unmanaged shell jobs, detached sessions, adapter child processes, local polling loops, PIDs, logs, and comments are evidence rather than liveness; a managed runtime service counts only when paired with a persisted monitor, wake, blocker, or delegated issue that owns the next check
 - heartbeat finalization evaluates liveness from persisted Paperclip state; an issue cannot remain healthy `in_progress` solely because the exiting heartbeat started a local/background watcher
 - a continuation cancelled as `issue_continuation_waiting_on_review` first converts a current typed wait target into a first-class wait; without a current target it is classified as `deliberate_wait_without_target` and gives the invokable original owner five normal-model disposition-repair attempts (immediate, then after 60, 120, 240, and 480 seconds, with up to 10 percent jitter)
@@ -1356,7 +1366,7 @@ Invites tab does not hide this Cloud action.
 ## 10.3 Agents
 
 The Harness / Runtime configuration page offers **Upgrade runner** for existing
-legacy Claude and Codex agents when the target environment selects Paperclip
+legacy Claude, Codex, and Grok Build agents when the target environment selects Paperclip
 Runner by default. The action uses the normal authorized agent PATCH with
 `runner: "paperclip"`, includes pending configuration edits, and retains the
 model and compatible settings. A rejected conversion leaves saved configuration
@@ -2612,3 +2622,13 @@ Company-managed [Prompt Injection Prevention](prompt-injection-prevention.md)
 optionally classifies existing tool-result boundaries through a shared OpenRouter
 connection. Settings → Connections is permanent; valid model verdicts take
 precedence and dependency failures use the original built-in detector.
+
+## Agent connection administration (2026-10-13)
+
+Standard agents can configure connections through the same domain APIs used by the app, bounded by their grants and their responsible user's current authority. Fresh standard agents for default Operators can manage app/tool connections, chat/email channels, AI accounts and pools, profiles and gateways without additional grants. Existing grants are not backfilled; explicit restrictions persist. Gateway administration retains the responsible human's administrative permission and does not grant agents blanket `tools:admin`.
+
+The agent performs authorized setup, reuses saved accounts and drafts, and hands off only required human authentication, consent, credential entry or identity confirmation. Saved handoffs resume through existing task continuation after current authority is rechecked. Management, tool execution and approval remain separate. Private accounts, host commands and stored credentials retain their boundaries; agent-issued gateway clients preserve issuer and responsible-user restrictions at use time.
+
+Authorized policy administration includes user-requested changes that loosen the acting agent’s own tool controls. These writes remain bounded by management grants, resource scope and the responsible user’s current authority; they do not need an additional approval solely because the agent is a target. Subsequent tool calls obey the resulting policy. Agents cannot approve their own governed action requests or edit their own principal permission grants.
+
+The implementation, operation inventory, permission matrix and fixture qualification are recorded in [Agent API parity for connection configuration](plans/2026-10-13-connection-api-parity.md). Provider fixtures establish API behavior; they do not constitute live provider setup or an empirical agent-success claim.

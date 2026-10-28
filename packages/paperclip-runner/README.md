@@ -333,6 +333,10 @@ Remote Codex sessions relay assigned app tools through the server's configured
 gateway. Small catalogs are sent directly. When a catalog would exceed the
 runner's 256-operation or 768 KiB contract limit, the server exposes
 `paperclip_search_assigned_tools` and `paperclip_call_assigned_tool` instead.
+Search accepts a `limit` from 1 to 20 and defaults to 5 results per page.
+Use the returned `nextOffset` as `offset` to read the next page. The tool and
+parameter descriptions include these bounds for providers that render numeric
+schema constraints as plain number types.
 Search returns bounded pages of names, descriptions, and input schemas. Each
 page intersects the session's pinned assignments with current gateway grants.
 An individual schema that exceeds a page returns an `inputSchemaRef`. The same
@@ -387,6 +391,13 @@ agent-wide setting. No automatic decision policy selects it. The model must
 support disabling reasoning; other runner providers reject an explicit selection
 before starting work. Native sessions expose support through the
 `perTurnReasoning` capability.
+
+For the native `openrouter/` route, the parent-held provider proxy retains the
+upstream OpenRouter key. The child config keeps the selected `openrouter` provider
+and exact model, using a random loopback token restricted to that model's chat
+completions endpoint. The proxy and token expire when the session closes. The
+local token remains a credential and is redacted from diagnostics; this does not
+claim isolation for every child credential or persisted value.
 
 OpenCode's proxy sends agent instructions once per turn through the system prompt. The
 task envelope retains task-specific constraints and the completion contract,
