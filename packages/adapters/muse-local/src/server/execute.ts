@@ -385,7 +385,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     inputTokens: 0,
     outputTokens: 0,
     cachedInputTokens: 0,
-    return await withWorkspaceRestore(
+  };
+
+  return await withWorkspaceRestore(
       async () => {
         const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, command, args, {
           cwd: effectiveExecutionCwd,
