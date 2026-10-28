@@ -23,8 +23,3 @@ export const loginCapability = {
 };
 
 export { listMuseSkills, syncMuseSkills } from "./skills.js";
-export {
-  copyBackMuseAuth,
-  type CopyBackMuseAuthOutcome,
-  type CopyBackMuseAuthInput,
-} from "./muse-auth-copyback.js";

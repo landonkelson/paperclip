@@ -48,7 +48,7 @@
     "ui-parser.cjs"
   ],
   "scripts": {
-    "build": "tsc && cp src/server/muse-auth-merge-decision.cjs dist/server/",
+    "build": "tsc",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit"
   },
