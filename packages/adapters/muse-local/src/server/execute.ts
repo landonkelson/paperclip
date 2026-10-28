@@ -15,7 +15,6 @@ import {
   isPaperclipSkillSourceMissing,
   readPaperclipRuntimeSkillEntries,
   resolveLegacyPaperclipDesiredSkillNames as resolveMuseDesiredSkillNames,
-  buildSkillLibraryManifestMarkdown,
   parseObject,
   renderTemplate,
   hydrateFreshSessionHandoff,
@@ -31,6 +30,7 @@ import {
   ensurePathInEnv,
   readPaperclipIssueWorkModeFromContext,
 } from "@paperclipai/adapter-utils/server-utils";
+import { buildSkillLibraryManifestMarkdown } from "@paperclipai/adapter-utils/skill-library-manifest";
 import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
 import fs from "node:fs/promises";
 import path from "node:path";
