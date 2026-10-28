@@ -215,4 +215,60 @@ describe("muse_local execute", () => {
     expect(result.errorCode).toBe("workspace_restore_failed");
     expect(result.errorMessage).toContain("Workspace restore failed");
   });
+
+  it("does not leak host process.env secrets to remote execution target", async () => {
+    const root = await makeTempRoot();
+    let remoteEnv: Record<string, string> | undefined;
+
+    runProcessMock.mockImplementationOnce(
+      async (
+        _runId: string,
+        _target: unknown,
+        _command: string,
+        _args: string[],
+        options?: any,
+      ) => {
+        remoteEnv = options?.env;
+        return {
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stdout: JSON.stringify({ payload_type: "run.terminal.completed", payload: { text: "Task completed." } }),
+          stderr: "",
+        };
+      },
+    );
+
+    const ctx = makeContext(root, {
+      executionTarget: { kind: "remote", targetId: "target-remote-1" } as any,
+    });
+
+    const result = await execute(ctx);
+    expect(result.exitCode).toBe(0);
+    expect(remoteEnv).toBeDefined();
+    expect(remoteEnv?.DATABASE_URL).toBeUndefined();
+    expect(remoteEnv?.HOST_SECRET).toBeUndefined();
+    expect(remoteEnv?.PAPERCLIP_RUN_ID).toBe("run-123");
+    expect(remoteEnv?.PAPERCLIP_API_KEY).toBe("agent-auth-token");
+  });
+
+  it("cleans up temporary run directory when preparation fails before execution", async () => {
+    const root = await makeTempRoot();
+    let createdTmpDir: string | undefined;
+
+    const onMeta = vi.fn(async (meta: AdapterExecutionMeta) => {
+      createdTmpDir = (meta.env as Record<string, string> | undefined)?.XDG_CONFIG_HOME;
+      throw new Error("Simulated onMeta preparation error");
+    });
+
+    const ctx = makeContext(root, { onMeta });
+
+    await expect(execute(ctx)).rejects.toThrow("Simulated onMeta preparation error");
+    expect(createdTmpDir).toBeDefined();
+
+    // Verify createdTmpDir was cleaned up by the finally block
+    const exists = await fs.access(createdTmpDir!).then(() => true).catch(() => false);
+    expect(exists).toBe(false);
+  });
 });
+

@@ -23,3 +23,4 @@ export const loginCapability = {
 };
 
 export { listMuseSkills, syncMuseSkills } from "./skills.js";
+export { decideMuseAuthMerge } from "./muse-auth-merge-decision.js";

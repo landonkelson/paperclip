@@ -27,7 +27,9 @@ export async function testEnvironment(
   const configuredCommand = asString(ctx.config?.command, "muse");
   const fallbackPath = path.join(os.homedir(), ".local/bin/muse");
   const command =
-    configuredCommand === "muse" && (await fs.access(fallbackPath).then(() => true).catch(() => false))
+    target.kind === "local" &&
+    configuredCommand === "muse" &&
+    (await fs.access(fallbackPath).then(() => true).catch(() => false))
       ? fallbackPath
       : configuredCommand;
 

@@ -59,7 +59,9 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const configuredCommand = asString(config.command, "muse");
   const fallbackPath = path.join(os.homedir(), ".local/bin/muse");
   const command =
-    configuredCommand === "muse" && (await fs.access(fallbackPath).then(() => true).catch(() => false))
+    executionTarget.kind === "local" &&
+    configuredCommand === "muse" &&
+    (await fs.access(fallbackPath).then(() => true).catch(() => false))
       ? fallbackPath
       : configuredCommand;
 
@@ -117,7 +119,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-${runId}-`));
   env.XDG_CONFIG_HOME = runTmpDir;
 
-  const targetAuth = path.join(runTmpDir, "muse", "auth.json");
+  const stagedSkillDirs: string[] = [];
+  const createdParentDirs: string[] = [];
+
+  try {
+    const targetAuth = path.join(runTmpDir, "muse", "auth.json");
   const sourceCandidates = [
     env.MUSE_AUTH_PATH,
     originalXdgConfig ? path.join(originalXdgConfig, "muse", "auth.json") : null,
@@ -163,9 +169,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     entries: museSkillEntries,
     desiredSkillKeys: desiredSkillNames,
   });
-
-  const stagedSkillDirs: string[] = [];
-  const createdParentDirs: string[] = [];
 
   if (selectedSkills.length > 0) {
     const stagingRoots = [
@@ -382,14 +385,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     inputTokens: 0,
     outputTokens: 0,
     cachedInputTokens: 0,
-  };
-
-  try {
     return await withWorkspaceRestore(
       async () => {
         const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, command, args, {
           cwd: effectiveExecutionCwd,
-          env: effectiveEnv,
+          env: executionTarget.kind === "local" ? effectiveEnv : env,
           timeoutSec: asNumber(config.timeoutSec, 600),
           graceSec: asNumber(config.graceSec, 15),
           onSpawn,

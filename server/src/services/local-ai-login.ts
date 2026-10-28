@@ -153,7 +153,7 @@ export function localAiLoginService(db: Db) {
   async function check(companyId: string, userId: string, intent: AiConnectionLoginIntent, id?: string): Promise<LocalAiLoginStatus> {
     let directory: string | undefined;
     {
-      if (!id) throw unprocessable(intent.provider === "xai"
+      if (!id) throw unprocessable(intent.provider === "xai" || intent.provider === "muse"
         ? "Start local sign-in before checking this account."
         : "Start browser sign-in before checking this account.");
       const [session] = await db.select().from(adapterAuthSessions).where(and(
@@ -173,7 +173,7 @@ export function localAiLoginService(db: Db) {
     } catch {
       const login = id ? browserLogins.get(id) : undefined;
       return { status: "sign_in_required", authorizationUrl: login?.authorizationUrl, code: login?.code,
-        ...(!login && intent.provider !== "xai"
+        ...(!login && intent.provider !== "xai" && intent.provider !== "muse"
           ? { error: "The server restarted during sign-in. Start sign-in again." }
           : login?.outcome === "failure"
             ? { error: login.error ?? "Sign-in ended before the account was connected. Start sign-in again." }

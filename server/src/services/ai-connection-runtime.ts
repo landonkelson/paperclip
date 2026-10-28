@@ -23,6 +23,7 @@ import { WORKSPACE_RESTORE_LOCK_TIMEOUT_CODE } from "@paperclipai/adapter-utils/
 import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/execution-target";
 import { runAdapterExecutionTargetProcess } from "@paperclipai/adapter-utils/execution-target";
 import { decideGrokAuthMerge } from "@paperclipai/adapter-grok-local/server";
+import { decideMuseAuthMerge } from "@paperclipai/adapter-muse-local/server";
 
 export function isAiConnectionBusy(error: unknown): error is HttpError {
   return error instanceof HttpError && error.status === 422 &&
@@ -333,15 +334,22 @@ export async function prepareManagedAiRuntime(
       AI_CONNECTION_CAPABILITIES[input.binding.provider].methods[
         selection.attribution.method
       ]!;
-    const authFile = path.join(providerHome, "auth.json");
+    const authFile =
+      input.binding.provider === "muse" && selection.attribution.method === "subscription"
+        ? path.join(home, "config", "muse", "auth.json")
+        : path.join(providerHome, "auth.json");
     if (harness === "codex_local")
       await writeFile(
         path.join(providerHome, "config.toml"),
         'cli_auth_credentials_store = "file"\n',
         { mode: 0o600 },
       );
-    if (!routing && subscriptionFile) await writeFile(authFile, value, { mode: 0o600 });
-    else if (!routing) env[capability.envKey] = value;
+    if (!routing && subscriptionFile) {
+      if (input.binding.provider === "muse") {
+        await mkdir(path.dirname(authFile), { recursive: true, mode: 0o700 });
+      }
+      await writeFile(authFile, value, { mode: 0o600 });
+    } else if (!routing) env[capability.envKey] = value;
     if (
       !routing && input.binding.provider === "openai" && harness === "codex_local" &&
       selection.attribution.method === "api_key"
@@ -358,10 +366,7 @@ export async function prepareManagedAiRuntime(
       env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     }
     if (input.binding.provider === "muse" && selection.attribution.method === "subscription") {
-      const museConfigDir = path.join(home, "config", "muse");
-      await mkdir(museConfigDir, { recursive: true, mode: 0o700 });
-      await writeFile(path.join(museConfigDir, "auth.json"), value, { mode: 0o600 });
-      env.MUSE_AUTH_PATH = path.join(museConfigDir, "auth.json");
+      env.MUSE_AUTH_PATH = authFile;
       env.MUSE_NO_AUTO_UPDATE = "1";
     } else if (input.binding.provider === "muse") {
       env.MUSE_NO_AUTO_UPDATE = "1";
@@ -479,9 +484,13 @@ export async function prepareManagedAiRuntime(
                   ? await decideCodexAuthMerge(authFile, destination, {
                       errorLabel: "AI account refresh",
                     })
-                  : await decideGrokAuthMerge(authFile, destination, {
-                      errorLabel: "AI account refresh",
-                    });
+                  : input.binding.provider === "muse"
+                    ? await decideMuseAuthMerge(authFile, destination, {
+                        errorLabel: "AI account refresh",
+                      })
+                    : await decideGrokAuthMerge(authFile, destination, {
+                        errorLabel: "AI account refresh",
+                      });
               if (decision !== 10) return;
               await secretService(tx).rotate(
                 ref.secretId,
