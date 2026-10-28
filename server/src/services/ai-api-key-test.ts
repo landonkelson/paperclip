@@ -7,7 +7,13 @@ export async function validateAiApiKey(
   key: string,
   request: typeof fetch = fetch,
 ) {
-  if (provider === "github" || provider === "muse") return;
+  if (provider === "github") return;
+  if (provider === "muse") {
+    if (!key || typeof key !== "string" || key.trim().length < 8) {
+      throw unprocessable("The provider rejected this API key.", { code: "ai_connection_api_key_rejected" });
+    }
+    return;
+  }
   const endpoints = {
     anthropic: "https://api.anthropic.com/v1/models?limit=1",
     openai: "https://api.openai.com/v1/models",

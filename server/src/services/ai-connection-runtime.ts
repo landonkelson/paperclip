@@ -201,6 +201,7 @@ function managedAiHomeEnvironment(home: string): Record<string, string> {
     GROK_HOME: providerHome,
     CLAUDE_CONFIG_DIR: providerHome,
     HERMES_HOME: providerHome,
+    MUSE_AUTH_PATH: path.join(home, "config", "muse", "auth.json"),
   };
 }
 
@@ -217,7 +218,7 @@ export function managedAiSessionFingerprintConfig(
   }
   const managed = config.managedAiConnection as Record<string, unknown> | undefined;
   if (managed?.sessionIdentity) {
-    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GROK_API_KEY", "OPENCODE_AUTH_JSON", "OPENCODE_CONFIG_CONTENT"]) {
+    for (const key of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GROK_API_KEY", "META_API_KEY", "OPENCODE_AUTH_JSON", "OPENCODE_CONFIG_CONTENT"]) {
       if (env[key]) env[key] = "<managed-ai-credential>";
     }
   }
@@ -356,11 +357,13 @@ export async function prepareManagedAiRuntime(
       });
       env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     }
-    if (input.binding.provider === "muse") {
+    if (input.binding.provider === "muse" && selection.attribution.method === "subscription") {
       const museConfigDir = path.join(home, "config", "muse");
       await mkdir(museConfigDir, { recursive: true, mode: 0o700 });
       await writeFile(path.join(museConfigDir, "auth.json"), value, { mode: 0o600 });
-      env.MUSE_AUTH_PATH = authFile;
+      env.MUSE_AUTH_PATH = path.join(museConfigDir, "auth.json");
+      env.MUSE_NO_AUTO_UPDATE = "1";
+    } else if (input.binding.provider === "muse") {
       env.MUSE_NO_AUTO_UPDATE = "1";
     }
     if (!routing && input.binding.provider === "google" && harness === "gemini_local") {

@@ -1,12 +1,14 @@
 import {
   runAdapterExecutionTargetProcess,
   readAdapterExecutionTarget,
+  prepareAdapterExecutionTargetRuntime,
+  resolveAdapterExecutionTargetCommandForLogs,
 } from "@paperclipai/adapter-utils/execution-target";
 import { fileURLToPath } from "node:url";
-const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 import {
   asString,
   asNumber,
+  asStringArray,
   materializePaperclipSkillCopy,
   isPaperclipSkillSourceMissing,
   readPaperclipRuntimeSkillEntries,
@@ -21,11 +23,18 @@ import {
   joinPromptSections,
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE,
+  buildPaperclipEnv,
+  buildRuntimeToolsEnv,
+  buildInvocationEnvForLogs,
+  ensurePathInEnv,
+  readPaperclipIssueWorkModeFromContext,
 } from "@paperclipai/adapter-utils/server-utils";
 import type { AdapterExecutionContext, AdapterExecutionResult } from "@paperclipai/adapter-utils";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+
+const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExecutionResult> {
   const {
@@ -58,9 +67,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const configuredCwd = asString(config.cwd, "");
   const cwd = workspaceCwd || configuredCwd || process.cwd();
 
+  const envConfig = parseObject(config.env);
   const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
-    ...(parseObject(config.env) as Record<string, string>),
+    ...buildPaperclipEnv(agent, ctx.agentIdentity),
+    ...buildRuntimeToolsEnv(ctx.runtimeTools),
+    ...(envConfig as Record<string, string>),
     MUSE_NO_AUTO_UPDATE: "1",
     PAPERCLIP_RUN_ID: runId,
   };
@@ -68,19 +79,53 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     env.PAPERCLIP_API_KEY = authToken;
   }
 
-  // Ensure $XDG_CONFIG_HOME/muse/auth.json is populated from MUSE_AUTH_PATH or fallback
-  const xdgConfig = env.XDG_CONFIG_HOME || path.join(env.HOME || os.homedir(), ".config");
-  const targetAuth = path.join(xdgConfig, "muse", "auth.json");
+  const wakeTaskId =
+    (typeof context.taskId === "string" && context.taskId.trim().length > 0 && context.taskId.trim()) ||
+    (typeof context.issueId === "string" && context.issueId.trim().length > 0 && context.issueId.trim()) ||
+    null;
+  const wakeReason =
+    typeof context.wakeReason === "string" && context.wakeReason.trim().length > 0
+      ? context.wakeReason.trim()
+      : null;
+  const wakeCommentId =
+    (typeof context.wakeCommentId === "string" && context.wakeCommentId.trim().length > 0 && context.wakeCommentId.trim()) ||
+    (typeof context.commentId === "string" && context.commentId.trim().length > 0 && context.commentId.trim()) ||
+    null;
+  const approvalId =
+    typeof context.approvalId === "string" && context.approvalId.trim().length > 0
+      ? context.approvalId.trim()
+      : null;
+  const approvalStatus =
+    typeof context.approvalStatus === "string" && context.approvalStatus.trim().length > 0
+      ? context.approvalStatus.trim()
+      : null;
+  const linkedIssueIds = Array.isArray(context.issueIds)
+    ? context.issueIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : [];
+  const issueWorkMode = readPaperclipIssueWorkModeFromContext(context);
+  if (wakeTaskId) env.PAPERCLIP_TASK_ID = wakeTaskId;
+  if (issueWorkMode) env.PAPERCLIP_ISSUE_WORK_MODE = issueWorkMode;
+  if (wakeReason) env.PAPERCLIP_WAKE_REASON = wakeReason;
+  if (wakeCommentId) env.PAPERCLIP_WAKE_COMMENT_ID = wakeCommentId;
+  if (approvalId) env.PAPERCLIP_APPROVAL_ID = approvalId;
+  if (approvalStatus) env.PAPERCLIP_APPROVAL_STATUS = approvalStatus;
+  if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
+
+  // Dedicated per-run directory to isolate credentials and runtime files
+  const runTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-${runId}-`));
+  env.XDG_CONFIG_HOME = runTmpDir;
+
+  const targetAuth = path.join(runTmpDir, "muse", "auth.json");
   const sourceCandidates = [
     env.MUSE_AUTH_PATH,
-    path.join(env.HOME || os.homedir(), ".config/muse/auth.json"),
+    path.join(process.env.HOME || os.homedir(), ".config/muse/auth.json"),
   ].filter(Boolean) as string[];
 
   for (const src of sourceCandidates) {
     if (src && src !== targetAuth && (await fs.access(src).then(() => true).catch(() => false))) {
       try {
         const data = await fs.readFile(src, "utf8");
-        await fs.mkdir(path.join(xdgConfig, "muse"), { recursive: true, mode: 0o700 });
+        await fs.mkdir(path.join(runTmpDir, "muse"), { recursive: true, mode: 0o700 });
         await fs.writeFile(targetAuth, data, { mode: 0o600 });
         break;
       } catch {}
@@ -92,6 +137,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   const runtimeSessionId = asString(runtimeSessionParams.sessionId, runtime?.sessionId ?? "");
   const canResumeSession = runtimeSessionId.length > 0;
   const resumeSessionId = canResumeSession ? runtimeSessionId : null;
+
   // Skills resolution and staging
   const museSkillEntries = await readPaperclipRuntimeSkillEntries(config, __moduleDir);
   const desiredSkillNames = new Set(resolveMuseDesiredSkillNames(config, museSkillEntries));
@@ -115,8 +161,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     desiredSkillKeys: desiredSkillNames,
   });
 
-  const stagedCleanup: Array<{ kind: "dir" | "file"; path: string }> = [];
-  const ensureCleanupDir = (candidate: string) => stagedCleanup.push({ kind: "dir", path: candidate });
+  const stagedSkillDirs: string[] = [];
+  const createdParentDirs: string[] = [];
 
   if (selectedSkills.length > 0) {
     const stagingRoots = [
@@ -128,12 +174,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       const dirExisted = await fs.access(dir).then(() => true).catch(() => false);
       if (!dirExisted) {
         await fs.mkdir(dir, { recursive: true });
-        ensureCleanupDir(dir);
+        createdParentDirs.push(dir);
       }
       const skillsDirExisted = await fs.access(skillsDir).then(() => true).catch(() => false);
       if (!skillsDirExisted) {
         await fs.mkdir(skillsDir, { recursive: true });
-        ensureCleanupDir(skillsDir);
+        createdParentDirs.push(skillsDir);
       }
       for (const skill of selectedSkills) {
         const target = path.join(skillsDir, skill.runtimeName);
@@ -146,7 +192,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         }
         try {
           await materializePaperclipSkillCopy(skill.source, target);
-          ensureCleanupDir(target);
+          stagedSkillDirs.push(target);
         } catch (err: unknown) {
           if (onLog) {
             await onLog(
@@ -184,7 +230,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     config.promptTemplate,
     context.conversationMode === true
       ? DEFAULT_PAPERCLIP_CONVERSATION_PROMPT_TEMPLATE
-      : DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE
+      : DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   );
   const bootstrapPromptTemplate = asString(config.bootstrapPromptTemplate, "");
   const templateData = {
@@ -229,17 +275,57 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     prompt = "Please proceed with your assigned tasks.";
   }
 
-  const tmpPrompt = path.join(os.tmpdir(), `muse-prompt-${runId}.txt`);
-  await fs.writeFile(tmpPrompt, prompt, "utf8");
+  const localPromptPath = path.join(runTmpDir, "prompt.txt");
+  await fs.writeFile(localPromptPath, prompt, { encoding: "utf8", mode: 0o600 });
+
+  let restoreRemoteWorkspace: (() => Promise<void>) | null = null;
+  let effectiveExecutionCwd = cwd;
+  let effectivePromptPath = localPromptPath;
+
+  if (executionTarget?.kind === "remote") {
+    const preparedExecutionTargetRuntime = await prepareAdapterExecutionTargetRuntime({
+      runId,
+      target: executionTarget,
+      adapterKey: "muse",
+      timeoutSec: asNumber(config.timeoutSec, 600),
+      workspaceLocalDir: cwd,
+      installCommand: null,
+      detectCommand: command,
+      onProgress: (line) => onLog?.("stdout", line),
+      onRuntimeProgress: ctx.onRuntimeProgress,
+      assets: [
+        {
+          key: "runConfig",
+          localDir: runTmpDir,
+          restore: async ({ assetDir, readFile }) => {
+            try {
+              const remoteAuthBytes = await readFile(path.posix.join(assetDir, "muse", "auth.json"));
+              if (remoteAuthBytes && env.MUSE_AUTH_PATH) {
+                await fs.writeFile(env.MUSE_AUTH_PATH, remoteAuthBytes, { mode: 0o600 });
+              }
+            } catch {}
+          },
+        },
+      ],
+    });
+    restoreRemoteWorkspace = () =>
+      preparedExecutionTargetRuntime.restoreWorkspace((line) => onLog?.("stdout", line));
+    effectiveExecutionCwd = preparedExecutionTargetRuntime.workspaceRemoteDir ?? effectiveExecutionCwd;
+    const remoteConfigDir = preparedExecutionTargetRuntime.assetDirs.runConfig;
+    if (remoteConfigDir) {
+      env.XDG_CONFIG_HOME = remoteConfigDir;
+      effectivePromptPath = path.posix.join(remoteConfigDir, "prompt.txt");
+    }
+  }
 
   const args = [
     "exec",
     "--json",
     "--yolo",
     "--workspace",
-    cwd,
+    effectiveExecutionCwd,
     "--prompt-file",
-    tmpPrompt,
+    effectivePromptPath,
   ];
 
   if (resumeSessionId) {
@@ -253,17 +339,40 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (effort && effort !== "auto") {
     args.push("--reasoning-effort", String(effort));
   }
-  if (config.extraArgs && Array.isArray(config.extraArgs)) {
-    args.push(...(config.extraArgs as string[]));
+  const extraArgs = (() => {
+    const fromExtra = asStringArray(config.extraArgs);
+    if (fromExtra.length > 0) return fromExtra;
+    return asStringArray(config.args);
+  })();
+  if (extraArgs.length > 0) {
+    args.push(...extraArgs);
   }
+
+  const effectiveEnv = Object.fromEntries(
+    Object.entries({ ...process.env, ...env }).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+  const runtimeEnv = ensurePathInEnv(effectiveEnv);
+  const resolvedCommand = await resolveAdapterExecutionTargetCommandForLogs(
+    command,
+    executionTarget,
+    effectiveExecutionCwd,
+    runtimeEnv,
+  );
+  const loggedEnv = buildInvocationEnvForLogs(env, {
+    runtimeEnv,
+    includeRuntimeKeys: ["HOME", "XDG_CONFIG_HOME"],
+    resolvedCommand,
+  });
 
   if (onMeta) {
     await onMeta({
       adapterType: "muse_local",
       command,
-      cwd,
+      cwd: effectiveExecutionCwd,
       commandArgs: args,
-      env,
+      env: loggedEnv,
       prompt,
       context,
     });
@@ -281,8 +390,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
 
   try {
     const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, command, args, {
-      cwd,
-      env,
+      cwd: effectiveExecutionCwd,
+      env: effectiveEnv,
       timeoutSec: asNumber(config.timeoutSec, 600),
       graceSec: asNumber(config.graceSec, 15),
       onSpawn,
@@ -350,7 +459,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       usage,
       usageBasis: "per_run",
       sessionId: resolvedSessionId,
-      sessionParams: resolvedSessionId ? { sessionId: resolvedSessionId, cwd } : null,
+      sessionParams: resolvedSessionId ? { sessionId: resolvedSessionId, cwd: effectiveExecutionCwd } : null,
       sessionDisplayId: resolvedSessionId,
       provider: "muse",
       biller: "meta",
@@ -365,13 +474,18 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       clearSession: false,
     };
   } finally {
-    await fs.unlink(tmpPrompt).catch(() => {});
-    for (const entry of [...stagedCleanup].reverse()) {
-      if (entry.kind === "file") {
-        await fs.rm(entry.path, { force: true }).catch(() => undefined);
-      } else {
-        await fs.rm(entry.path, { recursive: true, force: true }).catch(() => undefined);
-      }
+    await restoreRemoteWorkspace?.().catch(() => {});
+    for (const target of stagedSkillDirs) {
+      await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
     }
+    for (const dir of [...createdParentDirs].reverse()) {
+      try {
+        const entries = await fs.readdir(dir);
+        if (entries.length === 0) {
+          await fs.rmdir(dir);
+        }
+      } catch {}
+    }
+    await fs.rm(runTmpDir, { recursive: true, force: true }).catch(() => undefined);
   }
 }

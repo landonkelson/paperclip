@@ -37,13 +37,15 @@
       "./cli": {
         "types": "./dist/cli/index.d.ts",
         "import": "./dist/cli/index.js"
-      }
+      },
+      "./ui-parser": "./ui-parser.cjs"
     },
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts"
   },
   "files": [
-    "dist"
+    "dist",
+    "ui-parser.cjs"
   ],
   "scripts": {
     "build": "tsc",

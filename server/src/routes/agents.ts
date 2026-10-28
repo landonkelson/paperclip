@@ -1183,6 +1183,20 @@ export function agentRoutes(
           }
         },
       },
+      muse_local: {
+        async promote(authBytes, context) {
+          const managedSession = await adapterLoginStore.get(context.sessionId);
+          if (managedSession?.aiConnection) {
+            await adapterLoginStore.withCompanyAdapterPromotionLock(context.companyId, context.startedByUserId, context.adapterType, async () => {
+              let parsed: unknown;
+              try { parsed = JSON.parse(authBytes.toString("utf8")); } catch { throw new Error("Provider credential is not ready"); }
+              if (!parsed || typeof parsed !== "object") throw new Error("Provider credential is not ready");
+              await aiConnectionService(db).save(context.companyId, context.startedByUserId, managedSession.aiConnection!, authBytes.toString("utf8"), { id: context.sessionId });
+            });
+            return;
+          }
+        },
+      },
     } satisfies Partial<Record<AgentAdapterType, CredentialPromotion>>,
     recordActivity: (event) => {
       // The event carries no URL, no code, no credential, no account identifier,
@@ -2286,6 +2300,7 @@ export function agentRoutes(
     claude_local: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"],
     codex_local: ["OPENAI_API_KEY", "CODEX_API_KEY"],
     grok_local: ["XAI_API_KEY"],
+    muse_local: ["META_API_KEY"],
   };
 
   function isInheritableCredentialReference(value: unknown): value is Record<string, unknown> {
@@ -3059,7 +3074,7 @@ export function agentRoutes(
       if (!pool) throw unprocessable("Enable an accessible AI connection pool");
       const catalog = new Map<string, { id: string; label: string }>();
       for (const member of pool.members) {
-        const memberAdapter = member.binding.provider === "openai" ? "codex_local" : member.binding.provider === "anthropic" ? "claude_local" : member.binding.provider === "xai" ? "grok_local" : "opencode_local";
+        const memberAdapter = member.binding.provider === "openai" ? "codex_local" : member.binding.provider === "anthropic" ? "claude_local" : member.binding.provider === "xai" ? "grok_local" : member.binding.provider === "muse" ? "muse_local" : "opencode_local";
         const models = [{ id: member.profile.model, label: member.profile.model }, ...await listAdapterModels(memberAdapter)];
         for (const model of models) {
           try { poolMemberRuntimeConfig({ ...member, profile: { ...member.profile, model: model.id } }, type); catalog.set(model.id, model); } catch { /* Only qualified profiles belong in the pool catalog. */ }

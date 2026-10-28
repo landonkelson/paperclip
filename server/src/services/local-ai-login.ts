@@ -31,6 +31,7 @@ function presentAttempt(id: string, expiresAt: Date, provider: string): LocalAiL
   return {
     sessionId: id, expiresAt: expiresAt.toISOString(),
     ...(provider === "xai" ? { command: `(export GROK_HOME=${shellQuote(directory)} && mkdir -p "$GROK_HOME" && grok login --device-auth)` } : {}),
+    ...(provider === "muse" ? { command: `(export MUSE_AUTH_PATH=${shellQuote(path.join(directory, "auth.json"))} && mkdir -p ${shellQuote(directory)} && muse login)` } : {}),
   };
 }
 async function prepareHome(id: string, provider: string) {
@@ -59,7 +60,7 @@ export function localAiLoginService(db: Db) {
     browserLogins.delete(id);
   }
   function ensureBrowserLogin(id: string, provider: string) {
-    if (provider === "xai" || browserLogins.has(id)) return;
+    if (provider === "xai" || provider === "muse" || browserLogins.has(id)) return;
     browserLogins.set(id, startLocalBrowserLogin(provider as "anthropic" | "openai", loginHome(id)));
   }
   async function reapExpired() {
@@ -84,12 +85,12 @@ export function localAiLoginService(db: Db) {
   }
 
   async function start(companyId: string, userId: string, intent: AiConnectionLoginIntent, restart = false): Promise<LocalAiLoginAttempt> {
-    if (intent.provider !== "openai" && intent.provider !== "xai" && intent.provider !== "anthropic")
+    if (intent.provider !== "openai" && intent.provider !== "xai" && intent.provider !== "anthropic" && intent.provider !== "muse")
       throw unprocessable("This provider does not use a separate local login home.");
     await reapExpired();
     const attempt = await db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`ai-local-login:${companyId}:${userId}:${intent.provider}`}, 0))`);
-      const adapterType = intent.provider === "openai" ? "codex_local" : intent.provider === "anthropic" ? "claude_local" : "grok_local";
+      const adapterType = intent.provider === "openai" ? "codex_local" : intent.provider === "anthropic" ? "claude_local" : intent.provider === "xai" ? "grok_local" : "muse_local";
       const [existing] = await tx.select().from(adapterAuthSessions).where(and(
         eq(adapterAuthSessions.companyId, companyId), eq(adapterAuthSessions.startedByUserId, userId),
         eq(adapterAuthSessions.adapterType, adapterType),

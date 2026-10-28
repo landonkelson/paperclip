@@ -1426,7 +1426,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
         ? "mode"
         : adapterType === "opencode_local"
           ? "variant"
-          : adapterType === "grok_local" ? "reasoningEffort"
+          : adapterType === "grok_local" || adapterType === "muse_local" ? "reasoningEffort"
           : adapterType === "pi_local" ? "thinking" : "effort";
   const thinkingEffortOptions =
     isCodexHarness
@@ -1442,8 +1442,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             ? kimiThinkingEffortOptions
             : adapterType === "pi_local"
               ? [{ id: "", label: "Auto" }, ...["off", "minimal", "low", "medium", "high", "xhigh"].map(id => ({ id, label: id }))]
-              : harnessType === "claude_local" || adapterType === "grok_local"
-                ? [{ id: "", label: "Auto" }, ...setupEfforts(harnessType, currentModelId).map((id) => ({
+              : harnessType === "claude_local" || adapterType === "grok_local" || adapterType === "muse_local"
+                ? [{ id: "", label: "Auto" }, ...setupEfforts(isRunnerHarness ? harnessType : adapterType, currentModelId).map((id) => ({
                     id,
                     label: id === "xhigh" ? "X-High" : id[0].toUpperCase() + id.slice(1),
                   }))]
@@ -1460,7 +1460,13 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
         ? eff("adapterConfig", "mode", String(config.mode ?? ""))
         : adapterType === "opencode_local"
           ? eff("adapterConfig", "variant", String(config.variant ?? ""))
-          : eff("adapterConfig", thinkingEffortKey, String(config[thinkingEffortKey] ?? ""));
+          : adapterType === "grok_local" || adapterType === "muse_local"
+            ? eff(
+                "adapterConfig",
+                thinkingEffortKey,
+                String(config[thinkingEffortKey] ?? config.reasoningEffort ?? config.effort ?? ""),
+              )
+            : eff("adapterConfig", thinkingEffortKey, String(config[thinkingEffortKey] ?? ""));
   const showThinkingEffort = !(harnessType === "pi_local" && fieldsAdapterType === "paperclip_runner")
     && adapterType !== "gemini_local"
     && adapterType !== "cursor_cloud"
@@ -1938,7 +1944,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                 value={currentModelId}
                 onChange={(v) => {
                   const supportedEfforts = setupEfforts(isRunnerHarness ? harnessType : adapterType, v);
-                  const clearUnsupportedEffort = ["codex_local", "claude_local", "grok_local"].includes(isRunnerHarness ? harnessType : adapterType)
+                  const clearUnsupportedEffort = ["codex_local", "claude_local", "grok_local", "muse_local"].includes(isRunnerHarness ? harnessType : adapterType)
                     && Boolean(currentThinkingEffort)
                     && !supportedEfforts.includes(String(currentThinkingEffort));
                   if (isCreate) {
@@ -2005,7 +2011,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
                         ? set!({ thinkingEffort: v })
                         : (() => {
                             mark("adapterConfig", thinkingEffortKey, v || undefined);
-                            if (isRunnerHarness) {
+                            if (isRunnerHarness || adapterType === "grok_local" || adapterType === "muse_local") {
                               for (const key of ["modelReasoningEffort", "reasoningEffort", "effort"]) if (key !== thinkingEffortKey) mark("adapterConfig", key, undefined);
                             }
                           })()

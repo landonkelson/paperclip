@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -8,15 +6,23 @@ import type {
   AdapterEnvironmentTestContext,
   AdapterEnvironmentTestResult,
 } from "@paperclipai/adapter-utils";
-import { asString } from "@paperclipai/adapter-utils/server-utils";
-
-const execFileAsync = promisify(execFile);
+import { asString, ensurePathInEnv, parseObject } from "@paperclipai/adapter-utils/server-utils";
+import {
+  readAdapterExecutionTarget,
+  resolveAdapterExecutionTargetCwd,
+  ensureAdapterExecutionTargetCommandResolvable,
+  runAdapterExecutionTargetProcess,
+} from "@paperclipai/adapter-utils/execution-target";
 
 export async function testEnvironment(
-  ctx: AdapterEnvironmentTestContext
+  ctx: AdapterEnvironmentTestContext,
 ): Promise<AdapterEnvironmentTestResult> {
   const checks: AdapterEnvironmentCheck[] = [];
-  let binaryFound = false;
+  const target = readAdapterExecutionTarget({
+    executionTarget: ctx.executionTarget,
+    legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
+  });
+
   const configuredCommand = asString(ctx.config?.command, "muse");
   const fallbackPath = path.join(os.homedir(), ".local/bin/muse");
   const command =
@@ -24,14 +30,47 @@ export async function testEnvironment(
       ? fallbackPath
       : configuredCommand;
 
+  const rawCwd = asString(ctx.config?.cwd, "");
+  const cwd = resolveAdapterExecutionTargetCwd(target, rawCwd || os.homedir());
+
+  const configEnv = parseObject(ctx.config?.env) as Record<string, string>;
+  const env: Record<string, string> = {
+    MUSE_NO_AUTO_UPDATE: "1",
+    ...configEnv,
+  };
+  const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+
+  let binaryFound = false;
   try {
-    const { stdout } = await execFileAsync(command, ["--version"], { timeout: 5000 });
-    checks.push({
-      code: "muse_cli_installed",
-      level: "info",
-      message: `Muse CLI installed: ${stdout.trim()}`,
-    });
-    binaryFound = true;
+    await ensureAdapterExecutionTargetCommandResolvable(command, target, cwd, runtimeEnv);
+    const versionProcess = await runAdapterExecutionTargetProcess(
+      `muse-version-${Date.now()}`,
+      target,
+      command,
+      ["--version"],
+      {
+        cwd,
+        env: runtimeEnv,
+        timeoutSec: 10,
+        graceSec: 2,
+        onLog: async () => {},
+      },
+    );
+    if ((versionProcess.exitCode ?? 0) === 0) {
+      checks.push({
+        code: "muse_cli_installed",
+        level: "info",
+        message: `Muse CLI installed: ${(versionProcess.stdout || "").trim()}`,
+      });
+      binaryFound = true;
+    } else {
+      checks.push({
+        code: "muse_cli_missing",
+        level: "error",
+        message: "Muse CLI binary was found but exited with an error.",
+        hint: "Run 'curl -fsSL https://dev.meta.ai/install.sh | bash' to reinstall Muse.",
+      });
+    }
   } catch {
     checks.push({
       code: "muse_cli_missing",
@@ -42,21 +81,17 @@ export async function testEnvironment(
   }
 
   if (binaryFound) {
-    const env: Record<string, string | undefined> = {
-      ...process.env,
-      ...(ctx.config?.env as Record<string, string> | undefined),
-      MUSE_NO_AUTO_UPDATE: "1",
-    };
-
-    const xdgConfig = env.XDG_CONFIG_HOME || path.join(env.HOME || os.homedir(), ".config");
+    const xdgConfig = env.XDG_CONFIG_HOME || path.join(runtimeEnv.HOME || os.homedir(), ".config");
     const targetAuth = path.join(xdgConfig, "muse", "auth.json");
     const sourceCandidates = [
       env.MUSE_AUTH_PATH,
-      path.join(env.HOME || os.homedir(), ".config/muse/auth.json"),
+      path.join(runtimeEnv.HOME || os.homedir(), ".config/muse/auth.json"),
     ].filter(Boolean) as string[];
 
     let hasAuth = false;
-    if (await fs.access(targetAuth).then(() => true).catch(() => false)) {
+    if (target?.kind === "remote") {
+      hasAuth = Boolean(env.MUSE_AUTH_PATH || env.META_API_KEY || runtimeEnv.META_API_KEY);
+    } else if (await fs.access(targetAuth).then(() => true).catch(() => false)) {
       hasAuth = true;
     } else {
       for (const src of sourceCandidates) {
@@ -71,7 +106,7 @@ export async function testEnvironment(
         }
       }
     }
-    if (!hasAuth && env.META_API_KEY) {
+    if (!hasAuth && (env.META_API_KEY || runtimeEnv.META_API_KEY)) {
       hasAuth = true;
     }
 
@@ -85,13 +120,28 @@ export async function testEnvironment(
       try {
         const model = asString(ctx.config?.model, "muse-wonder-1.0");
         const probeArgs = ["exec", "--model", model, "--yolo", "Respond with hello"];
-        const probe = await execFileAsync(command, probeArgs, {
-          timeout: 25000,
-          env,
-          cwd: asString(ctx.config?.cwd, os.homedir()),
-        });
+        const probeProcess = await runAdapterExecutionTargetProcess(
+          `muse-probe-${Date.now()}`,
+          target,
+          command,
+          probeArgs,
+          {
+            cwd,
+            env: runtimeEnv,
+            timeoutSec: 25,
+            graceSec: 3,
+            onLog: async () => {},
+          },
+        );
 
-        if (/\bhello\b/i.test(probe.stdout)) {
+        if (probeProcess.timedOut) {
+          checks.push({
+            code: "muse_hello_probe_failed",
+            level: "error",
+            message: "Muse hello probe timed out.",
+            hint: "Verify your Muse Code subscription and network connectivity.",
+          });
+        } else if (/\bhello\b/i.test(probeProcess.stdout || "")) {
           checks.push({
             code: "muse_hello_probe_passed",
             level: "info",
@@ -102,6 +152,7 @@ export async function testEnvironment(
             code: "muse_hello_probe_unexpected_output",
             level: "warn",
             message: "Muse probe ran but did not return 'hello' as expected.",
+            detail: (probeProcess.stdout || probeProcess.stderr || "").trim().slice(0, 200),
           });
         }
       } catch (err: unknown) {

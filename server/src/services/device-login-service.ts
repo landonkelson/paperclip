@@ -27,6 +27,10 @@ import {
   GROK_DEVICE_LOGIN_COMMAND as DEFAULT_GROK_LOGIN_COMMAND,
   parseGrokDeviceLoginPrompt,
 } from "@paperclipai/adapter-grok-local/server";
+import {
+  MUSE_DEVICE_LOGIN_COMMAND as DEFAULT_MUSE_LOGIN_COMMAND,
+  parseMuseDeviceLoginPrompt,
+} from "@paperclipai/adapter-muse-local/server";
 import type { AdapterLoginPrompt } from "@paperclipai/adapter-utils";
 import {
   createLoginPtyTransport,
@@ -856,6 +860,13 @@ export const DISPLAYED_CODE_PROFILES: Readonly<
     command: DEFAULT_GROK_LOGIN_COMMAND,
     homeEnvVar: "GROK_HOME",
     parsePrompt: parseGrokDeviceLoginPrompt,
+    timeoutMs: DEVICE_LOGIN_TIMEOUT_MS,
+    promotion: UNCONFIGURED_PROMOTION,
+  },
+  muse_local: {
+    command: DEFAULT_MUSE_LOGIN_COMMAND,
+    homeEnvVar: "MUSE_AUTH_PATH",
+    parsePrompt: parseMuseDeviceLoginPrompt,
     timeoutMs: DEVICE_LOGIN_TIMEOUT_MS,
     promotion: UNCONFIGURED_PROMOTION,
   },
