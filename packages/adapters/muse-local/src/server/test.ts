@@ -159,6 +159,15 @@ export async function testEnvironment(
             probeEnv.MUSE_AUTH_PATH = path.posix.join(stagedRemoteConfig, "muse", "auth.json");
           }
           cleanupProbe = async () => {
+            if (stagedRemoteConfig && target?.kind === "remote") {
+              await runAdapterExecutionTargetProcess(
+                probeRunId,
+                target,
+                "rm",
+                ["-rf", stagedRemoteConfig],
+                { cwd: effectiveProbeCwd, env: {}, timeoutSec: 10, graceSec: 2, onLog: async () => {} },
+              ).catch(() => {});
+            }
             await prepared.restoreWorkspace().catch(() => {});
             await fs.rm(localWorkspaceDir, { recursive: true, force: true }).catch(() => {});
             await fs.rm(probeTmpDir, { recursive: true, force: true }).catch(() => {});
