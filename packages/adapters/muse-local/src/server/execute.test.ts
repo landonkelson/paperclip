@@ -154,6 +154,34 @@ describe("muse_local execute", () => {
     await fs.mkdir(museDir, { recursive: true });
     await fs.writeFile(path.join(museDir, "auth.json"), JSON.stringify({ token: "custom-auth-token" }), "utf8");
 
+    let capturedStagedAuthContent: string | null = null;
+    let capturedXdgConfig: string | undefined = undefined;
+
+    runProcessMock.mockImplementationOnce(
+      async (
+        _runId: string,
+        _target: unknown,
+        _command: string,
+        _args: string[],
+        options?: any,
+      ) => {
+        capturedXdgConfig = options?.env?.XDG_CONFIG_HOME;
+        if (capturedXdgConfig) {
+          const stagedAuth = path.join(capturedXdgConfig, "muse", "auth.json");
+          try {
+            capturedStagedAuthContent = await fs.readFile(stagedAuth, "utf8");
+          } catch {}
+        }
+        return {
+          exitCode: 0,
+          signal: null,
+          timedOut: false,
+          stdout: JSON.stringify({ payload_type: "run.terminal.completed", payload: { text: "Task completed." } }),
+          stderr: "",
+        };
+      },
+    );
+
     const onMeta = vi.fn(async (_meta: AdapterExecutionMeta) => {});
     const ctx = makeContext(root, {
       onMeta,
@@ -164,15 +192,9 @@ describe("muse_local execute", () => {
     });
 
     await execute(ctx);
-    expect(runProcessMock).toHaveBeenCalledTimes(1);
-    const runOpts = runProcessMock.mock.calls[0]![4] as { env?: Record<string, string> };
-    // The execution env XDG_CONFIG_HOME should point to the isolated temp dir
-    expect(runOpts.env?.XDG_CONFIG_HOME).toBeDefined();
-    expect(runOpts.env?.XDG_CONFIG_HOME).not.toBe(customConfig);
-    // And auth.json in that isolated dir should contain the custom auth token
-    const stagedAuth = path.join(runOpts.env!.XDG_CONFIG_HOME!, "muse", "auth.json");
-    const stagedAuthContent = await fs.readFile(stagedAuth, "utf8");
-    expect(stagedAuthContent).toContain("custom-auth-token");
+    expect(capturedXdgConfig).toBeDefined();
+    expect(capturedXdgConfig).not.toBe(customConfig);
+    expect(capturedStagedAuthContent).toContain("custom-auth-token");
   });
 
   it("reports workspace restore failure when remote workspace restore fails", async () => {

@@ -140,6 +140,7 @@ export async function testEnvironment(
             adapterKey: "muse",
             workspaceLocalDir: localWorkspaceDir,
             workspaceRemoteDir: cwd,
+            syncWorkspace: false,
             workspaceRestoreRetryDelaysMs: [],
             assets: [
               {
@@ -212,7 +213,6 @@ export async function testEnvironment(
         });
       } finally {
         await cleanupProbe?.();
-      }
       }
     } else {
       checks.push({
