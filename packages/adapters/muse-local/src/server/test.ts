@@ -12,6 +12,7 @@ import {
   resolveAdapterExecutionTargetCwd,
   ensureAdapterExecutionTargetCommandResolvable,
   runAdapterExecutionTargetProcess,
+  prepareAdapterExecutionTargetRuntime,
 } from "@paperclipai/adapter-utils/execution-target";
 
 export async function testEnvironment(
@@ -81,18 +82,20 @@ export async function testEnvironment(
   }
 
   if (binaryFound) {
+    const originalXdgConfig = env.XDG_CONFIG_HOME || process.env.XDG_CONFIG_HOME;
     const xdgConfig = env.XDG_CONFIG_HOME || path.join(runtimeEnv.HOME || os.homedir(), ".config");
     const targetAuth = path.join(xdgConfig, "muse", "auth.json");
     const sourceCandidates = [
       env.MUSE_AUTH_PATH,
+      originalXdgConfig ? path.join(originalXdgConfig, "muse", "auth.json") : null,
       path.join(runtimeEnv.HOME || os.homedir(), ".config/muse/auth.json"),
     ].filter(Boolean) as string[];
 
     let hasAuth = false;
-    if (target?.kind === "remote") {
-      hasAuth = Boolean(env.MUSE_AUTH_PATH || env.META_API_KEY || runtimeEnv.META_API_KEY);
-    } else if (await fs.access(targetAuth).then(() => true).catch(() => false)) {
+    let authContent: string | null = null;
+    if (await fs.access(targetAuth).then(() => true).catch(() => false)) {
       hasAuth = true;
+      authContent = await fs.readFile(targetAuth, "utf8").catch(() => null);
     } else {
       for (const src of sourceCandidates) {
         if (src && src !== targetAuth && (await fs.access(src).then(() => true).catch(() => false))) {
@@ -101,10 +104,14 @@ export async function testEnvironment(
             await fs.mkdir(path.join(xdgConfig, "muse"), { recursive: true, mode: 0o700 });
             await fs.writeFile(targetAuth, data, { mode: 0o600 });
             hasAuth = true;
+            authContent = data;
             break;
           } catch {}
         }
       }
+    }
+    if (target?.kind === "remote") {
+      hasAuth = Boolean(authContent || env.MUSE_AUTH_PATH || env.META_API_KEY || runtimeEnv.META_API_KEY);
     }
     if (!hasAuth && (env.META_API_KEY || runtimeEnv.META_API_KEY)) {
       hasAuth = true;
@@ -117,6 +124,46 @@ export async function testEnvironment(
         message: "Muse credentials configured.",
       });
 
+      let effectiveProbeCwd = cwd;
+      let probeEnv = { ...runtimeEnv };
+      let cleanupProbe: (() => Promise<void>) | null = null;
+
+      if (target?.kind === "remote" && authContent) {
+        const probeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-test-${Date.now()}-`));
+        await fs.mkdir(path.join(probeTmpDir, "muse"), { recursive: true, mode: 0o700 });
+        await fs.writeFile(path.join(probeTmpDir, "muse", "auth.json"), authContent, { mode: 0o600 });
+        const localWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-ws-${Date.now()}-`));
+        try {
+          const prepared = await prepareAdapterExecutionTargetRuntime({
+            runId: `muse-probe-${Date.now()}`,
+            target,
+            adapterKey: "muse",
+            workspaceLocalDir: localWorkspaceDir,
+            workspaceRemoteDir: cwd,
+            workspaceRestoreRetryDelaysMs: [],
+            assets: [
+              {
+                key: "runConfig",
+                localDir: probeTmpDir,
+                restore: async () => {},
+              },
+            ],
+          });
+          effectiveProbeCwd = prepared.workspaceRemoteDir ?? effectiveProbeCwd;
+          if (prepared.assetDirs.runConfig) {
+            probeEnv.XDG_CONFIG_HOME = prepared.assetDirs.runConfig;
+            probeEnv.MUSE_AUTH_PATH = path.posix.join(prepared.assetDirs.runConfig, "muse", "auth.json");
+          }
+          cleanupProbe = async () => {
+            await fs.rm(localWorkspaceDir, { recursive: true, force: true }).catch(() => {});
+            await fs.rm(probeTmpDir, { recursive: true, force: true }).catch(() => {});
+          };
+        } catch {
+          await fs.rm(localWorkspaceDir, { recursive: true, force: true }).catch(() => {});
+          await fs.rm(probeTmpDir, { recursive: true, force: true }).catch(() => {});
+        }
+      }
+
       try {
         const model = asString(ctx.config?.model, "muse-wonder-1.0");
         const probeArgs = ["exec", "--model", model, "--yolo", "Respond with hello"];
@@ -126,8 +173,8 @@ export async function testEnvironment(
           command,
           probeArgs,
           {
-            cwd,
-            env: runtimeEnv,
+            cwd: effectiveProbeCwd,
+            env: probeEnv,
             timeoutSec: 25,
             graceSec: 3,
             onLog: async () => {},
@@ -163,6 +210,9 @@ export async function testEnvironment(
           message: `Muse hello probe failed: ${message}`,
           hint: "Verify your Muse Code subscription and API connectivity.",
         });
+      } finally {
+        await cleanupProbe?.();
+      }
       }
     } else {
       checks.push({

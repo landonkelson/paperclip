@@ -1,3 +1,4 @@
+import { withWorkspaceRestore } from "@paperclipai/adapter-utils/workspace-restore-result";
 import {
   runAdapterExecutionTargetProcess,
   readAdapterExecutionTarget,
@@ -112,12 +113,14 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (linkedIssueIds.length > 0) env.PAPERCLIP_LINKED_ISSUE_IDS = linkedIssueIds.join(",");
 
   // Dedicated per-run directory to isolate credentials and runtime files
+  const originalXdgConfig = env.XDG_CONFIG_HOME || process.env.XDG_CONFIG_HOME;
   const runTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-${runId}-`));
   env.XDG_CONFIG_HOME = runTmpDir;
 
   const targetAuth = path.join(runTmpDir, "muse", "auth.json");
   const sourceCandidates = [
     env.MUSE_AUTH_PATH,
+    originalXdgConfig ? path.join(originalXdgConfig, "muse", "auth.json") : null,
     path.join(process.env.HOME || os.homedir(), ".config/muse/auth.json"),
   ].filter(Boolean) as string[];
 
@@ -389,92 +392,98 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   };
 
   try {
-    const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, command, args, {
-      cwd: effectiveExecutionCwd,
-      env: effectiveEnv,
-      timeoutSec: asNumber(config.timeoutSec, 600),
-      graceSec: asNumber(config.graceSec, 15),
-      onSpawn,
-      onRuntimeProgress: ctx.onRuntimeProgress,
-      onLog: async (stream, chunk) => {
-        if (onLog) {
-          await onLog(stream, chunk);
-        }
-        if (stream === "stdout") {
-          stdout += chunk;
-        } else {
-          stderr += chunk;
-        }
-      },
-    });
+    return await withWorkspaceRestore(
+      async () => {
+        const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, command, args, {
+          cwd: effectiveExecutionCwd,
+          env: effectiveEnv,
+          timeoutSec: asNumber(config.timeoutSec, 600),
+          graceSec: asNumber(config.graceSec, 15),
+          onSpawn,
+          onRuntimeProgress: ctx.onRuntimeProgress,
+          onLog: async (stream, chunk) => {
+            if (onLog) {
+              await onLog(stream, chunk);
+            }
+            if (stream === "stdout") {
+              stdout += chunk;
+            } else {
+              stderr += chunk;
+            }
+          },
+        });
 
-    // Parse events from stdout
-    const lines = stdout.split("\n");
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const obj = JSON.parse(trimmed) as {
-          stream?: { kind?: string; id?: string };
-          payload_type?: string;
-          payload?: { text?: string; models?: Array<{ input_tokens?: number; output_tokens?: number; cached_tokens?: number }> };
+        // Parse events from stdout
+        const lines = stdout.split("\n");
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            const obj = JSON.parse(trimmed) as {
+              stream?: { kind?: string; id?: string };
+              payload_type?: string;
+              payload?: { text?: string; models?: Array<{ input_tokens?: number; output_tokens?: number; cached_tokens?: number }> };
+            };
+            if (obj.stream?.kind === "session" && obj.stream?.id) {
+              resolvedSessionId = obj.stream.id;
+            }
+            if (obj.payload_type === "run.terminal.completed" && obj.payload?.text) {
+              summary = obj.payload.text;
+            }
+            if (obj.payload_type === "run.usage" && Array.isArray(obj.payload?.models)) {
+              for (const m of obj.payload.models) {
+                usage.inputTokens += asNumber(m.input_tokens, 0);
+                usage.outputTokens += asNumber(m.output_tokens, 0);
+                usage.cachedInputTokens += asNumber(m.cached_tokens, 0);
+              }
+            }
+          } catch {}
+        }
+
+        // Sync back credentials if updated
+        if (env.MUSE_AUTH_PATH && env.MUSE_AUTH_PATH !== targetAuth) {
+          try {
+            const updated = await fs.readFile(targetAuth, "utf8");
+            await fs.writeFile(env.MUSE_AUTH_PATH, updated, { mode: 0o600 });
+          } catch {}
+        }
+
+        const failed = (proc.exitCode ?? 0) !== 0;
+        const errorMessage = failed
+          ? (proc.stderr?.trim() || `Muse exited with code ${proc.exitCode ?? -1}`)
+          : null;
+
+        return {
+          exitCode: proc.exitCode,
+          signal: proc.signal,
+          timedOut: proc.timedOut,
+          errorMessage,
+          errorCode: failed ? "muse_failed" : null,
+          errorFamily: null,
+          retryNotBefore: null,
+          usage,
+          usageBasis: "per_run",
+          sessionId: resolvedSessionId,
+          sessionParams: resolvedSessionId ? { sessionId: resolvedSessionId, cwd: effectiveExecutionCwd } : null,
+          sessionDisplayId: resolvedSessionId,
+          provider: "muse",
+          biller: "meta",
+          model,
+          billingType: "subscription",
+          costUsd: null,
+          resultJson: {
+            stdout: proc.stdout,
+            stderr: proc.stderr,
+          },
+          summary: summary || (failed ? "" : "Task completed."),
+          clearSession: false,
         };
-        if (obj.stream?.kind === "session" && obj.stream?.id) {
-          resolvedSessionId = obj.stream.id;
-        }
-        if (obj.payload_type === "run.terminal.completed" && obj.payload?.text) {
-          summary = obj.payload.text;
-        }
-        if (obj.payload_type === "run.usage" && Array.isArray(obj.payload?.models)) {
-          for (const m of obj.payload.models) {
-            usage.inputTokens += asNumber(m.input_tokens, 0);
-            usage.outputTokens += asNumber(m.output_tokens, 0);
-            usage.cachedInputTokens += asNumber(m.cached_tokens, 0);
-          }
-        }
-      } catch {}
-    }
-
-    // Sync back credentials if updated
-    if (env.MUSE_AUTH_PATH && env.MUSE_AUTH_PATH !== targetAuth) {
-      try {
-        const updated = await fs.readFile(targetAuth, "utf8");
-        await fs.writeFile(env.MUSE_AUTH_PATH, updated, { mode: 0o600 });
-      } catch {}
-    }
-
-    const failed = (proc.exitCode ?? 0) !== 0;
-    const errorMessage = failed
-      ? (proc.stderr?.trim() || `Muse exited with code ${proc.exitCode ?? -1}`)
-      : null;
-
-    return {
-      exitCode: proc.exitCode,
-      signal: proc.signal,
-      timedOut: proc.timedOut,
-      errorMessage,
-      errorCode: failed ? "muse_failed" : null,
-      errorFamily: null,
-      retryNotBefore: null,
-      usage,
-      usageBasis: "per_run",
-      sessionId: resolvedSessionId,
-      sessionParams: resolvedSessionId ? { sessionId: resolvedSessionId, cwd: effectiveExecutionCwd } : null,
-      sessionDisplayId: resolvedSessionId,
-      provider: "muse",
-      biller: "meta",
-      model,
-      billingType: "subscription",
-      costUsd: null,
-      resultJson: {
-        stdout: proc.stdout,
-        stderr: proc.stderr,
       },
-      summary: summary || (failed ? "" : "Task completed."),
-      clearSession: false,
-    };
+      async () => {
+        await restoreRemoteWorkspace?.();
+      },
+    );
   } finally {
-    await restoreRemoteWorkspace?.().catch(() => {});
     for (const target of stagedSkillDirs) {
       await fs.rm(target, { recursive: true, force: true }).catch(() => undefined);
     }

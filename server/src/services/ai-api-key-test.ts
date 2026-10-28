@@ -8,18 +8,13 @@ export async function validateAiApiKey(
   request: typeof fetch = fetch,
 ) {
   if (provider === "github") return;
-  if (provider === "muse") {
-    if (!key || typeof key !== "string" || key.trim().length < 8) {
-      throw unprocessable("The provider rejected this API key.", { code: "ai_connection_api_key_rejected" });
-    }
-    return;
-  }
   const endpoints = {
     anthropic: "https://api.anthropic.com/v1/models?limit=1",
     openai: "https://api.openai.com/v1/models",
     openrouter: "https://openrouter.ai/api/v1/key",
     xai: "https://api.x.ai/v1/models",
     google: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+    muse: "https://api.meta.ai/v1/models",
   };
   let response: Response;
   try {
