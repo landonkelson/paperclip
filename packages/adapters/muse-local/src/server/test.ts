@@ -127,15 +127,17 @@ export async function testEnvironment(
       let effectiveProbeCwd = cwd;
       let probeEnv = { ...runtimeEnv };
       let cleanupProbe: (() => Promise<void>) | null = null;
+      const probeRunId = `muse-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       if (target?.kind === "remote" && authContent) {
+        const assetKey = `probeConfig_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const probeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-test-${Date.now()}-`));
         await fs.mkdir(path.join(probeTmpDir, "muse"), { recursive: true, mode: 0o700 });
         await fs.writeFile(path.join(probeTmpDir, "muse", "auth.json"), authContent, { mode: 0o600 });
         const localWorkspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-ws-${Date.now()}-`));
         try {
           const prepared = await prepareAdapterExecutionTargetRuntime({
-            runId: `muse-probe-${Date.now()}`,
+            runId: probeRunId,
             target,
             adapterKey: "muse",
             workspaceLocalDir: localWorkspaceDir,
@@ -144,18 +146,20 @@ export async function testEnvironment(
             workspaceRestoreRetryDelaysMs: [],
             assets: [
               {
-                key: "runConfig",
+                key: assetKey,
                 localDir: probeTmpDir,
                 restore: async () => {},
               },
             ],
           });
           effectiveProbeCwd = prepared.workspaceRemoteDir ?? effectiveProbeCwd;
-          if (prepared.assetDirs.runConfig) {
-            probeEnv.XDG_CONFIG_HOME = prepared.assetDirs.runConfig;
-            probeEnv.MUSE_AUTH_PATH = path.posix.join(prepared.assetDirs.runConfig, "muse", "auth.json");
+          const stagedRemoteConfig = prepared.assetDirs[assetKey];
+          if (stagedRemoteConfig) {
+            probeEnv.XDG_CONFIG_HOME = stagedRemoteConfig;
+            probeEnv.MUSE_AUTH_PATH = path.posix.join(stagedRemoteConfig, "muse", "auth.json");
           }
           cleanupProbe = async () => {
+            await prepared.restoreWorkspace().catch(() => {});
             await fs.rm(localWorkspaceDir, { recursive: true, force: true }).catch(() => {});
             await fs.rm(probeTmpDir, { recursive: true, force: true }).catch(() => {});
           };
@@ -169,7 +173,7 @@ export async function testEnvironment(
         const model = asString(ctx.config?.model, "muse-wonder-1.0");
         const probeArgs = ["exec", "--model", model, "--yolo", "Respond with hello"];
         const probeProcess = await runAdapterExecutionTargetProcess(
-          `muse-probe-${Date.now()}`,
+          probeRunId,
           target,
           command,
           probeArgs,
