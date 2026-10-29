@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AdapterExecutionContext, AdapterExecutionMeta } from "@paperclipai/adapter-utils";
+import type { AdapterExecutionContext, AdapterInvocationMeta } from "@paperclipai/adapter-utils";
 
 const runProcessMock = vi.hoisted(() =>
   vi.fn(
@@ -92,7 +92,7 @@ describe("muse_local execute", () => {
 
   it("redacts host environment secrets in onMeta to prevent credential leakage into database", async () => {
     const root = await makeTempRoot();
-    const onMeta = vi.fn(async (_meta: AdapterExecutionMeta) => {});
+    const onMeta = vi.fn(async (_meta: AdapterInvocationMeta) => {});
     const ctx = makeContext(root, { onMeta });
 
     const result = await execute(ctx);
@@ -108,7 +108,7 @@ describe("muse_local execute", () => {
 
     // Standard run variables should be present
     expect(loggedEnv.PAPERCLIP_RUN_ID).toBe("run-123");
-    expect(loggedEnv.PAPERCLIP_API_KEY).toBe("agent-auth-token");
+    expect(loggedEnv.PAPERCLIP_API_KEY).toBe("***REDACTED***");
     expect(loggedEnv.MUSE_NO_AUTO_UPDATE).toBe("1");
   });
 
@@ -131,7 +131,7 @@ describe("muse_local execute", () => {
 
   it("passes model and reasoningEffort to CLI execution", async () => {
     const root = await makeTempRoot();
-    const onMeta = vi.fn(async (_meta: AdapterExecutionMeta) => {});
+    const onMeta = vi.fn(async (_meta: AdapterInvocationMeta) => {});
     const ctx = makeContext(root, {
       onMeta,
       config: { cwd: root, model: "muse-wonder-full-1.0", reasoningEffort: "xhigh" },
@@ -182,7 +182,7 @@ describe("muse_local execute", () => {
       },
     );
 
-    const onMeta = vi.fn(async (_meta: AdapterExecutionMeta) => {});
+    const onMeta = vi.fn(async (_meta: AdapterInvocationMeta) => {});
     const ctx = makeContext(root, {
       onMeta,
       config: {
@@ -256,7 +256,7 @@ describe("muse_local execute", () => {
     const root = await makeTempRoot();
     let createdTmpDir: string | undefined;
 
-    const onMeta = vi.fn(async (meta: AdapterExecutionMeta) => {
+    const onMeta = vi.fn(async (meta: AdapterInvocationMeta) => {
       createdTmpDir = (meta.env as Record<string, string> | undefined)?.XDG_CONFIG_HOME;
       throw new Error("Simulated onMeta preparation error");
     });

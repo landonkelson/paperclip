@@ -8,7 +8,7 @@ const runProcessMock = vi.hoisted(() =>
       _target: unknown,
       _command: string,
       args: string[],
-      _options?: unknown,
+      _options?: { env?: Record<string, string>; [key: string]: unknown },
     ) => {
       const isVersion = args.includes("--version");
       return {
@@ -22,7 +22,16 @@ const runProcessMock = vi.hoisted(() =>
   ),
 );
 
-const ensureResolvableMock = vi.hoisted(() => vi.fn(async () => {}));
+const ensureResolvableMock = vi.hoisted(() =>
+  vi.fn(
+    async (
+      _command: string,
+      _target: unknown,
+      _cwd: string,
+      _env?: Record<string, string>,
+    ) => {},
+  ),
+);
 
 const prepareRuntimeMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -85,26 +94,26 @@ describe("muse_local testEnvironment remote probe isolation", () => {
 
     // Check ensureAdapterExecutionTargetCommandResolvable
     expect(ensureResolvableMock).toHaveBeenCalledTimes(1);
-    const resolvableEnv = ensureResolvableMock.mock.calls[0][3] as Record<string, string>;
-    expect(resolvableEnv.SENTINEL_SECRET).toBeUndefined();
-    expect(resolvableEnv.DATABASE_URL).toBeUndefined();
-    expect(resolvableEnv.CUSTOM_VAR).toBe("custom-val");
+    const resolvableEnv = ensureResolvableMock.mock.calls[0][3];
+    expect(resolvableEnv?.SENTINEL_SECRET).toBeUndefined();
+    expect(resolvableEnv?.DATABASE_URL).toBeUndefined();
+    expect(resolvableEnv?.CUSTOM_VAR).toBe("custom-val");
 
     // Check runAdapterExecutionTargetProcess calls
     expect(runProcessMock).toHaveBeenCalledTimes(2);
 
     // Call 1: version probe
     const versionCallArgs = runProcessMock.mock.calls[0];
-    const versionOptions = versionCallArgs[4] as { env: Record<string, string> };
-    expect(versionOptions.env.SENTINEL_SECRET).toBeUndefined();
-    expect(versionOptions.env.DATABASE_URL).toBeUndefined();
-    expect(versionOptions.env.CUSTOM_VAR).toBe("custom-val");
+    const versionOptions = versionCallArgs[4];
+    expect(versionOptions?.env?.SENTINEL_SECRET).toBeUndefined();
+    expect(versionOptions?.env?.DATABASE_URL).toBeUndefined();
+    expect(versionOptions?.env?.CUSTOM_VAR).toBe("custom-val");
 
     // Call 2: hello probe
     const probeCallArgs = runProcessMock.mock.calls[1];
-    const probeOptions = probeCallArgs[4] as { env: Record<string, string> };
-    expect(probeOptions.env.SENTINEL_SECRET).toBeUndefined();
-    expect(probeOptions.env.DATABASE_URL).toBeUndefined();
-    expect(probeOptions.env.CUSTOM_VAR).toBe("custom-val");
+    const probeOptions = probeCallArgs[4];
+    expect(probeOptions?.env?.SENTINEL_SECRET).toBeUndefined();
+    expect(probeOptions?.env?.DATABASE_URL).toBeUndefined();
+    expect(probeOptions?.env?.CUSTOM_VAR).toBe("custom-val");
   });
 });
