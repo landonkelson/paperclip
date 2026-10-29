@@ -49,7 +49,12 @@ export async function testEnvironment(
 
   let binaryFound = false;
   try {
-    await ensureAdapterExecutionTargetCommandResolvable(command, target, cwd, runtimeEnv);
+    await ensureAdapterExecutionTargetCommandResolvable(
+      command,
+      target,
+      cwd,
+      targetIsRemote ? env : runtimeEnv,
+    );
     const versionProcess = await runAdapterExecutionTargetProcess(
       `muse-version-${Date.now()}`,
       target,
@@ -57,7 +62,7 @@ export async function testEnvironment(
       ["--version"],
       {
         cwd,
-        env: normalizedEnv,
+        env: targetIsRemote ? env : normalizedEnv,
         timeoutSec: 10,
         graceSec: 2,
         onLog: async () => {},
@@ -117,9 +122,8 @@ export async function testEnvironment(
       }
     }
     if (targetIsRemote) {
-      hasAuth = Boolean(authContent || env.MUSE_AUTH_PATH || env.META_API_KEY || runtimeEnv.META_API_KEY);
-    }
-    if (!hasAuth && (env.META_API_KEY || runtimeEnv.META_API_KEY)) {
+      hasAuth = Boolean(authContent || env.MUSE_AUTH_PATH || env.META_API_KEY);
+    } else if (!hasAuth && (env.META_API_KEY || runtimeEnv.META_API_KEY)) {
       hasAuth = true;
     }
 
@@ -131,7 +135,7 @@ export async function testEnvironment(
       });
 
       let effectiveProbeCwd = cwd;
-      let probeEnv: Record<string, string> = { ...normalizedEnv };
+      let probeEnv: Record<string, string> = targetIsRemote ? { ...env } : { ...normalizedEnv };
       let cleanupProbe: (() => Promise<void>) | null = null;
       const probeRunId = `muse-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
