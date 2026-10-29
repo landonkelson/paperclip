@@ -132,15 +132,13 @@ function readFreshness(raw) {
 }
 
 function decide(source, destination, nowMs) {
-  if (source.kind === "unusable" || destination.kind === "unusable") {
-    return KEEP_DESTINATION;
-  }
-
-  // Identity guard: if destination specifies an identity, source must match it exactly
-  if (destination.identity && source.identity !== destination.identity) {
-    return KEEP_DESTINATION;
-  }
-  if (source.identity && destination.identity && source.identity !== destination.identity) {
+  if (
+    source.kind === "unusable" ||
+    destination.kind === "unusable" ||
+    !source.identity ||
+    !destination.identity ||
+    source.identity !== destination.identity
+  ) {
     return KEEP_DESTINATION;
   }
 
