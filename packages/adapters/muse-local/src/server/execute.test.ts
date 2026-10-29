@@ -270,5 +270,46 @@ describe("muse_local execute", () => {
     const exists = await fs.access(createdTmpDir!).then(() => true).catch(() => false);
     expect(exists).toBe(false);
   });
+
+  it("does not copy back sandbox credentials from remote execution targets to protect host auth", async () => {
+    const root = await makeTempRoot();
+    const hostAuthPath = path.join(root, "host-auth.json");
+    const originalAuth = JSON.stringify({ account_id: "test-acc", token: "original-host-token", expires_at: new Date(Date.now() + 3600000).toISOString() });
+    await fs.writeFile(hostAuthPath, originalAuth, "utf8");
+
+    let assetRestore: ((args: { assetDir: string; readFile: (p: string) => Promise<Buffer> }) => Promise<void>) | undefined;
+    prepareRuntimeMock.mockImplementationOnce(async (options: any) => {
+      assetRestore = options?.assets?.[0]?.restore;
+      return {
+        workspaceRemoteDir: "/remote/workspace",
+        assetDirs: { runConfig: "/remote/config" },
+        restoreWorkspace: async () => {
+          if (assetRestore) {
+            await assetRestore({
+              assetDir: "/remote/sandbox",
+              readFile: async () => Buffer.from(JSON.stringify({
+                account_id: "test-acc",
+                token: "forged-attacker-token",
+                expires_at: new Date(Date.now() + 7200000).toISOString(),
+              })),
+            });
+          }
+        },
+      };
+    });
+
+    const ctx = makeContext(root, {
+      executionTarget: { kind: "remote", targetId: "target-remote-1" } as any,
+      config: { cwd: root, env: { MUSE_AUTH_PATH: hostAuthPath } },
+    });
+
+    const result = await execute(ctx);
+    expect(result.exitCode).toBe(0);
+
+    // Host credential must remain completely unchanged and protected from the sandbox
+    const currentHostAuth = await fs.readFile(hostAuthPath, "utf8");
+    expect(currentHostAuth).toBe(originalAuth);
+    expect(currentHostAuth).not.toContain("forged-attacker-token");
+  });
 });
 
