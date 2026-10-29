@@ -94,7 +94,6 @@ export function aiRoutingHarness(
         opencode: "opencode_local",
         grok: "grok_local",
         pi: "pi_local",
-        muse: "muse_local",
       } as Record<string, string>
     )[String(runner)] ?? "unsupported"
   );

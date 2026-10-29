@@ -6,6 +6,7 @@ import {
   resolveAdapterExecutionTargetCommandForLogs,
 } from "@paperclipai/adapter-utils/execution-target";
 import { fileURLToPath } from "node:url";
+import { copyBackMuseAuth } from "./muse-auth-copyback.js";
 import {
   asString,
   asNumber,
@@ -303,7 +304,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         {
           key: "runConfig",
           localDir: runTmpDir,
-          restore: async () => {},
+          restore: async ({ assetDir, readFile }) => {
+            if (env.MUSE_AUTH_PATH) {
+              await copyBackMuseAuth({
+                readSandboxAuth: () => readFile(path.posix.join(assetDir, "muse", "auth.json")),
+                hostAuthPath: env.MUSE_AUTH_PATH,
+                log: (line) => onLog?.("stdout", `${line}\n`),
+                env: process.env,
+              }).catch(() => undefined);
+            }
+          },
         },
       ],
     });
@@ -435,6 +445,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           } catch {}
         }
 
+        // Sync back credentials if updated
+        if (env.MUSE_AUTH_PATH && env.MUSE_AUTH_PATH !== targetAuth) {
+          await copyBackMuseAuth({
+            readSandboxAuth: async () => fs.readFile(targetAuth),
+            hostAuthPath: env.MUSE_AUTH_PATH,
+            log: (line) => onLog?.("stdout", `${line}\n`),
+            env: process.env,
+          }).catch(() => undefined);
+        }
 
         const failed = (proc.exitCode ?? 0) !== 0;
         const errorMessage = failed
