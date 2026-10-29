@@ -55,11 +55,12 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     executionTarget: rawExecutionTarget,
     legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
   });
+  const executionTargetIsRemote = executionTarget?.kind === "remote";
 
   const configuredCommand = asString(config.command, "muse");
   const fallbackPath = path.join(os.homedir(), ".local/bin/muse");
   const command =
-    executionTarget.kind === "local" &&
+    !executionTargetIsRemote &&
     configuredCommand === "muse" &&
     (await fs.access(fallbackPath).then(() => true).catch(() => false))
       ? fallbackPath
@@ -391,7 +392,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       async () => {
         const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, command, args, {
           cwd: effectiveExecutionCwd,
-          env: executionTarget.kind === "local" ? effectiveEnv : env,
+          env: !executionTargetIsRemote ? effectiveEnv : env,
           timeoutSec: asNumber(config.timeoutSec, 600),
           graceSec: asNumber(config.graceSec, 15),
           onSpawn,

@@ -21,20 +21,20 @@ export async function testEnvironment(
   const checks: AdapterEnvironmentCheck[] = [];
   const target = readAdapterExecutionTarget({
     executionTarget: ctx.executionTarget,
-    legacyRemoteExecution: ctx.executionTransport?.remoteExecution,
   });
+  const targetIsRemote = target?.kind === "remote";
 
   const configuredCommand = asString(ctx.config?.command, "muse");
   const fallbackPath = path.join(os.homedir(), ".local/bin/muse");
   const command =
-    target.kind === "local" &&
+    !targetIsRemote &&
     configuredCommand === "muse" &&
     (await fs.access(fallbackPath).then(() => true).catch(() => false))
       ? fallbackPath
       : configuredCommand;
 
   const rawCwd = asString(ctx.config?.cwd, "");
-  const cwd = resolveAdapterExecutionTargetCwd(target, rawCwd || os.homedir());
+  const cwd = resolveAdapterExecutionTargetCwd(target, rawCwd, os.homedir());
 
   const configEnv = parseObject(ctx.config?.env) as Record<string, string>;
   const env: Record<string, string> = {
@@ -42,6 +42,10 @@ export async function testEnvironment(
     ...configEnv,
   };
   const runtimeEnv = ensurePathInEnv({ ...process.env, ...env });
+  const normalizedEnv: Record<string, string> = {};
+  for (const [key, value] of Object.entries(runtimeEnv)) {
+    if (typeof value === "string") normalizedEnv[key] = value;
+  }
 
   let binaryFound = false;
   try {
@@ -53,7 +57,7 @@ export async function testEnvironment(
       ["--version"],
       {
         cwd,
-        env: runtimeEnv,
+        env: normalizedEnv,
         timeoutSec: 10,
         graceSec: 2,
         onLog: async () => {},
@@ -112,7 +116,7 @@ export async function testEnvironment(
         }
       }
     }
-    if (target?.kind === "remote") {
+    if (targetIsRemote) {
       hasAuth = Boolean(authContent || env.MUSE_AUTH_PATH || env.META_API_KEY || runtimeEnv.META_API_KEY);
     }
     if (!hasAuth && (env.META_API_KEY || runtimeEnv.META_API_KEY)) {
@@ -127,11 +131,11 @@ export async function testEnvironment(
       });
 
       let effectiveProbeCwd = cwd;
-      let probeEnv = { ...runtimeEnv };
+      let probeEnv: Record<string, string> = { ...normalizedEnv };
       let cleanupProbe: (() => Promise<void>) | null = null;
       const probeRunId = `muse-probe-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      if (target?.kind === "remote" && authContent) {
+      if (targetIsRemote && authContent) {
         const assetKey = `probeConfig_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
         const probeTmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `paperclip-muse-test-${Date.now()}-`));
         await fs.mkdir(path.join(probeTmpDir, "muse"), { recursive: true, mode: 0o700 });
@@ -161,7 +165,7 @@ export async function testEnvironment(
             probeEnv.MUSE_AUTH_PATH = path.posix.join(stagedRemoteConfig, "muse", "auth.json");
           }
           cleanupProbe = async () => {
-            if (stagedRemoteConfig && target?.kind === "remote") {
+            if (stagedRemoteConfig && targetIsRemote) {
               await runAdapterExecutionTargetProcess(
                 probeRunId,
                 target,
